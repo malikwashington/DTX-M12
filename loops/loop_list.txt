@@ -1,0 +1,13 @@
+# DTX-MULTI 12 percussion loops — source links + metadata
+# format: file | youtube | full title | pattern-name(<=11ch) | BPM | timing | note (idx=note-13)
+# Routing: loop notes (top of range, 94 down) = voice panned HARD RIGHT -> IEM.
+#          pad notes (31-55) + all others = CENTER -> FOH.  Pattern notes are absolute.
+
+loop1 | https://youtu.be/1SUZSme6fzY | Sinach - Way Maker - Loop/Click Track (BPM 66)     | Way Maker   | 66  | 4/4 | note94 (idx0x51)
+loop2 | https://youtu.be/p1Kgdu9t_uI | Tasha Cobbs Leonard - Gracefully Broken (BPM 78)   | Gfully Brkn | 78  | 4/4 | note93 (idx0x50)
+loop3 | https://youtu.be/mn7f13-oQRw | Chasing After You - Vashawn Mitchell (80 BPM)      | Chsng Aftr  | 80  | 4/4 | note92 (idx0x4F)
+loop4 | https://youtu.be/bywMrxYf3p4 | You Deserve It - JJ Hairston (87 BPM, 6/8)         | You Dsrv It | 87  | 6/8 | note91 (idx0x4E)
+loop5 | https://youtu.be/tFfzKPSMw6Y | Shout #2 - Click Track/Loop (155 BPM)              | Shout #2    | 155 | 4/4 | note90 (idx0x4D)
+
+# pads (default notes, stick-triggered, keep CENTER): 2=55 3=53 4=48 5=45 6=41 7=36 8=31 9=42 10=35 11=34 12=46  (pad1=function)
+# free pattern-note space: 13-30 and 56-89 still open (~66 notes)

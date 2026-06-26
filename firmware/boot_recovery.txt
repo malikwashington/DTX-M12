@@ -1,0 +1,154 @@
+================================================================================
+ DTX-MULTI 12 — BOOT / FIRMWARE-UPDATE / RECOVERY ARCHITECTURE
+ Question: is there a re-flash/recovery path INDEPENDENT of the PROG app we'd patch?
+ Analyst track: boot/update/recovery only. code.bin = SH-2A BE, base 0x0C000000.
+ Date: 2026-06-23
+================================================================================
+
+VERDICT (high confidence)
+-------------------------
+**AN INDEPENDENT RE-FLASH / RECOVERY PATH EXISTS.** The firmware updater and the
+NOR-flash writer do NOT live in the PROG image we would patch (code.bin). They live
+in a separate, resident **BOOT block** that is flashed as its own region and is
+entered by a power-on key-combo, independent of the PROG application. A bad PROG
+(application) patch is therefore **re-flashable**: brick risk is LOW, limited
+essentially to power-loss DURING a flash write (the manual's "DON'T SHUTDOWN!!").
+
+This is corroborated three independent ways:
+ (1) Service-manual facts (Renesas part, external NOR flash chips, 3-block updater,
+     "BOOT ROM switching control", separate test/diagnostic program).
+ (2) The updater UI strings, the diagnostic-mode strings, and ANY NOR-flash command
+     sequence are ALL ABSENT from code.bin (and from the whole .PGM in the diag case).
+ (3) code.bin has no SH-2A reset vector table — it is not what the CPU boots into.
+
+--------------------------------------------------------------------------------
+1) HARDWARE / FLASH ARCHITECTURE  (from docs/sm_text.txt)
+--------------------------------------------------------------------------------
+- CPU: **R8A02032BG (X8810A00)**, Yamaha "SWX02" — a customized Renesas SH-2A with
+  on-chip SDRAM/bus controller. Manual line ~1675.
+- The program/wave memory is **EXTERNAL parallel NOR FLASH**, multiple devices:
+    * IC10  = PROGRAM ROM (FLASH ROM)  — holds BOOT + PROG  [test 32, "A0 20 00", ID-Read]
+    * IC11  = PROGRAM ROM              — read/compare test    [test 33, "A0 21 00"]
+    * IC13  = WAVE ROM (FLASH ROM)     — holds WAVE block     [test 34, "A0 22 00", ID-Read]
+  The diagnostic "ID Read test ... Device ID is obtained from the ROM" is the
+  standard JEDEC/CFI autoselect command -> confirms commodity NOR flash, programmed
+  with NOR command sequences (0xAA/0x55/0x90/0x80/0x30/0xA0...).
+- Manual lists a register bit **"BOOT ROM switching control"** (line ~2051): the
+  SH-2A selects its boot source. The CPU resets into the BOOT region, not PROG.
+
+- The updater file 8H39OS_.PGM is documented to contain **THREE blocks: WAVE, BOOT,
+  and PROG (program)** (manual ~6492 / 6548). The erase/write screen label changes
+  per block. So BOOT is a *separately flashable* region distinct from PROG.
+
+- Update is entered as a **power-on key-combo** ("Turn on the power while holding
+  down the [ ] button" -> "Update MULTI 12. Press [ENTER]"). Version check is a
+  different combo ([SHIFT]+power). Test program is yet another power-on mode
+  ([KIT]+[ENTER] per project memory). These special modes are handled by the BOOT
+  block / its own program, before/around the PROG app.
+
+--------------------------------------------------------------------------------
+2) WHAT IS — AND IS NOT — IN code.bin (the PROG block we'd patch)
+--------------------------------------------------------------------------------
+code.bin = first 0x140000 of the .PGM payload = the **PROG block** (the application).
+SH-2A 4F22 prologue density confirms ALL executable code is in this first 0x140000;
+the rest of the .PGM is WAVE data (the WAVE block). There is no second code blob
+(no BOOT-block code) inside this particular .PGM payload either.
+
+PRESENT in code.bin (application features):
+  - Synth/seq/menu engine, and the normal USB **file** subsystem (load/save kits,
+    waves, etc.). The "Now working...", "Executing...", "Completed.", "USB device..."
+    strings live at RAM ~0x0C08B400-0x0C08B700 and ARE loaded by application
+    functions in 0x0C019E00-0x0C01B300 (e.g. FUN_0c019ee6 loads 0x0C08B4FC;
+    FUN_0c01a078 loads 0x0C08B514; FUN_0c01a3a8 loads 0x0C08B544; FUN_0c01b2fe).
+    -> These are NORMAL USB FILE operations, NOT the firmware updater.
+  - The version-display screen ([SHIFT]+power): strings "Ver:" @0x0C08FC6B,
+    "DTX-MULTI 12" @0x0C08FC7A, "Ver 01.00" @0x0C09629C exist in code.bin. This is
+    just a display path; it is not the flash/recovery mechanism.
+  - Early HW bring-up: FUN_0c008868 (called from FUN_0c011490) programs the SH-2A
+    BSC/SDRAM and port registers (_DAT_fffc00xx bus regs, _DAT_fffe38xx port regs,
+    the 0xA55A SDRAM mode/refresh write + status-poll loop). This is RAM/bus init,
+    NOT flash programming.
+
+ABSENT from code.bin (searched exhaustively — Ghidra immediate scan + raw byte scan
+of the whole .PGM):
+  - **No NOR-flash command sequence** anywhere. No function contains the JEDEC
+    pattern (imm 0xAA + 0x55 + a command byte 0x90/0x80/0x30/0xA0/0xF0/0x10).
+    BootRecovery5 found ZERO such functions.
+  - **No Renesas FCU / on-chip-flash programming** (no FKEY 0xA5 + FCU command set;
+    the only 0xA55A is the SDRAM init noted above).
+  - **No updater-screen strings**: "Update MULTI 12.", "Checking File.",
+    "WAVE Erasing.", "WAVE Writing.99%", "DON'T SHUTDOWN!!", "Completed. Reboot
+    MULTI 12.", "File Error." — NONE appear anywhere in the entire 8H39OS_.PGM file.
+  - **No diagnostic/test-program strings**: "32:ROM (IC10)", ":RAM", "TEST PROGRAM",
+    "MIDI MODE", "Device ID" — NONE appear anywhere in the entire .PGM.
+  - **No reset vector table**: the first 0x20 bytes of code.bin are zero; there is no
+    plausible (initial-PC, initial-SP) pair in the first 0x1000. code.bin is not the
+    image the CPU boots into.
+
+--------------------------------------------------------------------------------
+3) INTERPRETATION
+--------------------------------------------------------------------------------
+The unit's flash (IC10) is laid out as [BOOT block | PROG block], with WAVE in IC13.
+The BOOT block is a small, self-contained resident program that:
+  - owns the SH-2A reset vector / power-on entry,
+  - reads the power-on key matrix to choose a mode (normal -> jump to PROG;
+    update-combo -> run updater; test-combo -> run diagnostic/test program),
+  - contains the firmware UPDATER (reads 8H39OS_.PGM from USB, verifies the 0x64
+    checksum, erases & programs the NOR flash sectors per block) AND the NOR
+    flash-writer (JEDEC command sequences) AND the test/diagnostic program.
+Its strings and code are NOT in code.bin (PROG) and not even in this OS-update .PGM,
+because this .PGM updates PROG+WAVE while the resident BOOT stays put.
+
+Consequence for patching PROG (code.bin):
+  - A corrupt PROG image cannot disable the updater or the flash-writer, because
+    those are in BOOT. Power-on with the update key-combo still runs the resident
+    updater, which can re-flash a known-good 8H39OS_.PGM over the bad PROG.
+  - Therefore the realistic brick risk is reduced to **power loss / interruption
+    DURING the actual flash erase/write** (exactly the manual's
+    "may be damaged and can never be started" warning). A simply-bad-but-fully-
+    written PROG image is recoverable.
+
+--------------------------------------------------------------------------------
+4) RECOVERY PROCEDURE (documented, manual pp.56-57)
+--------------------------------------------------------------------------------
+  1. Put a known-good 8H39OS_.PGM in the root of a USB drive (checksum must pass;
+     fix with firmware/pgm_checksum.py if you re-built it).
+  2. Power on while holding the update button -> "Update MULTI 12. Press [ENTER]".
+  3. Press [ENTER]; wait for check -> erase -> write (per block) -> "Completed.
+     Reboot MULTI 12." DO NOT cut power during this.
+  4. Re-check version via [SHIFT]+power.
+
+--------------------------------------------------------------------------------
+5) WHAT I COULD NOT DETERMINE (honest limits)
+--------------------------------------------------------------------------------
+  - The BOOT block's code/bytes are NOT present in code.bin or in this .PGM, so I
+    could not disassemble the updater/flash-writer itself or read its exact
+    JEDEC command set, sector map, or the exact key-combo GPIO mask. Confirming the
+    BOOT block byte-for-byte would require a .PGM version that actually carries a
+    BOOT block, or a raw dump of IC10's boot sector from the hardware.
+  - I could not 100%-prove the BOOT block is independently re-writable WITHOUT also
+    needing a working PROG (i.e., is BOOT's updater fully self-contained, or does it
+    lean on PROG routines?). The string/code evidence strongly says self-contained
+    (no shared updater strings), and the manual's separate-block + "damaged/never
+    starts only if power cut mid-write" wording supports it, but the absolute proof
+    lives in the BOOT block we don't have.
+  - Net: the recovery path is independent of PROG with high confidence; the one
+    residual unknown is whether a corrupted BOOT block (which we are NOT patching)
+    could itself be recovered — that would be the true hard-brick, and it is OUTSIDE
+    the region any PROG patch touches. So: don't patch/erase BOOT; only patch PROG.
+
+--------------------------------------------------------------------------------
+6) KEY ADDRESSES (in code.bin / PROG)
+--------------------------------------------------------------------------------
+  HW/SDRAM bring-up         FUN_0c008868  (caller FUN_0c011490)  [BSC/SDRAM, not flash]
+  USB-file UI (normal ops)  FUN_0c019ee6 / FUN_0c01a078 / FUN_0c01a3a8 / FUN_0c01b2fe
+  USB-file strings          RAM 0x0C08B400-0x0C08B700
+  version-screen strings    "Ver:" 0x0C08FC6B, "Ver 01.00" 0x0C09629C
+  .PGM header               checksum @0x64 (Σ bytes[0x80:]), size @0x68, hdr 0x80
+  Flash-writer / updater    NOT in code.bin — resident BOOT block (separate region)
+  Reset vector              NOT in code.bin — owned by BOOT block
+
+================================================================================
+ BOTTOM LINE: Independent recovery EXISTS. Patch PROG only, never touch BOOT.
+ Brick risk = power-loss-mid-write only; a fully-written bad PROG is re-flashable.
+================================================================================

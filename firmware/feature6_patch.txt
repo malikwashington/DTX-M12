@@ -1,0 +1,295 @@
+================================================================================
+FEATURE 6 — "STOP ALL SOUNDS ON A PAD STRIKE" — DESIGN + EMULATION (code 0x01 / Kit Increment)
+DTX-MULTI 12, code.bin (SH-2A BE, base 0x0C000000).  ANALYSIS ONLY — no flashing.
+For code.bin: file_off = RAM - 0x0C000000 (verified; the +0x80 in RE_LOG is payload/.PGM only).
+Emulator: Ghidra EmulatorHelper (Feat7Emu harness family).
+Evidence: f6_emu.txt (mute+trampoline), armhook01_emu.txt (code-0x01 hooked path),
+enumarms.txt (all 17 arms), classify.txt + strikepath.txt (layer analysis), muteentry.txt.
+================================================================================
+
+##############################################################################
+## 0. CRITICAL FINDING — READ FIRST (layer-correctness)
+##############################################################################
+FUN_0c0c9e60 is the pad-function **EDIT / CONFIG-APPLY** dispatcher (UI subsystem), NOT the
+per-pad-STRIKE action path. Proven three ways (classify.txt, strikepath.txt):
+  * Its caller (CALLER_OF_DISPATCH @0x0C0C97D4) is a UI/edit MESSAGE handler: it switches on a
+    message-type byte (`*pbVar3`); FUN_0c0c9e60 is called for message type 5 / subtype 0 when
+    `param_1[1]==0` (an edit/apply event).
+  * Each arm STORES the function-code byte into a per-function offset of a runtime parameter
+    block (code 0->blk+0, 1->blk+1, 6->blk+6, 7->blk+7, 8->blk+9, ...) and then tail-jumps to a
+    DISPLAY-REFRESH routine (0x0C0C74xx / 0x0C0C6Dxx). That is "apply the setting + redraw",
+    i.e. CONFIG, not "do the action now".
+  * FUN_0c0c9e60 and its caller are referenced ONLY from the 0x0C0Cxxxx UI cluster; ZERO refs
+    from the audio/strike engine region (<0x0C060000). The runtime block it writes (RAM
+    0x0C311B8C) is read only by other 0x0C0Cxxxx UI/display funcs.
+
+CONSEQUENCE: a hook in ANY arm of FUN_0c0c9e60 (code 0x01 included) fires when the pad function
+is APPLIED in the edit UI, NOT each time the pad is physically struck. So as a literal
+"stop-all-sounds ON A PAD STRIKE", this hook is the WRONG LAYER. The mute primitive + trampoline
+below are correct and proven; the open item is the HOOK SITE (see §6 "what's still needed").
+
+The code-0x01 hook is documented below exactly as requested (it is correct IF the goal is "apply
+this when the kit-increment pad-function is set"), with this caveat attached.
+
+##############################################################################
+## 1. CODE 0x01 (Kit Increment) ARM — THE REQUESTED HOOK
+##############################################################################
+From the full arm enumeration (enumarms.txt), code 0x01's arm:
+
+  ARM 0x01 @ 0x0C0C9F4E  (reached from the switch via `cmp/eq 0x1,r0; bt 0x0C0C9F4E`):
+    0x0C0C9F4E  84c3   mov.b @(0x3,r12),r0      ; r0 = function code (from assignment rec+3)
+    0x0C0C9F50  64d3   mov   r13,r4
+    0x0C0C9F52  80b1   mov.b r0,@(0x1,r11)       ; latch code into runtime block +1  (the "kit-inc"
+                                                 ;   parameter slot — this is what marks code 0x01)
+    0x0C0C9F54  d272   mov.l @(0x72,pc),r2       ; r2 = [0x0C0CA120] = 0x0C0C744E  (jmp target)
+    0x0C0C9F56  7f04   add   0x4,r15             ; --- epilogue ---
+    0x0C0C9F58  4f26   lds.l @r15+,pr            ; restore pr = the dispatcher's caller's return
+    0x0C0C9F5A  6ef6   mov.l @r15+,r14
+    0x0C0C9F5C  6df6   mov.l @r15+,r13
+    0x0C0C9F5E  6cf6   mov.l @r15+,r12
+    0x0C0C9F60  422b   jmp   @r2                 ; tail-jump to target (now -> trampoline)
+    0x0C0C9F62  6bf6   mov.l @r15+,r11           ; delay slot
+
+  WHAT IT DOES: latches the configured pad-function code (0x01) into runtime-block offset +1, then
+  refreshes the display (its normal jmp target 0x0C0C744E is a UI-refresh routine in the 0x0C0C74xx
+  family). "Kit Increment" = function code 0x01 per the live dump-diff (pad 1's cat 0x02/off0 = 0x01).
+  (Caveat per §0: this is the CONFIG-APPLY arm, not the strike action.)
+
+### STRUCTURE CHECK vs arm 0x07 — IDENTICAL (restores pr before jmp): YES.
+  enumarms.txt: arm 0x01 `restores-pr-before-transfer = true`. Same shape as arm 0x07 / 0x08:
+  it does `add 0x4,r15; lds.l @r15+,pr; pop r14/r13/r12` BEFORE `jmp @r2`. So pr already = the
+  dispatcher's caller's return address at the jmp -> when MUTE_ENTRY does its own `rts`, control
+  returns correctly to the caller. The SAME tail-call trampoline works; no adjustment needed.
+
+##############################################################################
+## 2. THE EXACT HOOK (code 0x01)
+##############################################################################
+Repoint arm-0x01's jmp-target literal at RAM 0x0C0CA120 to the trampoline.
+
+  HOOK literal:  RAM 0x0C0CA120
+    code.bin file offset:  0x0CA120
+    .PGM file offset    :  0x0CA1A0   (= 0x0CA120 + 0x80)
+    current 4 bytes:  0C 0C 74 4E      (-> 0x0C0C744E, the normal UI-refresh routine)
+    NEW     4 bytes:  0C 13 E1 C0      (-> trampoline at 0x0C13E1C0)
+
+This literal is UNIQUE to arm 0x01 (each arm has its own pool entry: arm0->0x0C0CA11C,
+arm1->0x0C0CA120, arm6->0x0C0CA12C, arm7->0x0C0CA130, arm8->0x0C0CA134, ...). Repointing 0x0C0CA120
+affects ONLY code 0x01. No instruction opcodes change — one data word only.
+
+##############################################################################
+## 3. THE TRAMPOLINE (unchanged)
+##############################################################################
+RAM 0x0C13E1C0 = code.bin file offset 0x13E1C0 (.PGM offset 0x13E240). Verified FREE: 1029
+consecutive 0x00 bytes, 4-aligned, refsInto=0, past the last prologue (0x0C13D5D8); in-image.
+    file 0x13E1C0:  E4 06        mov   #0x06, r4          ; flags = voice-clear(0x02) | transport-stop(0x04)
+    file 0x13E1C2:  D2 02        mov.l @(0x8,pc), r2      ; r2 = [0x0C13E1CC] = 0x0C048956
+    file 0x13E1C4:  42 2B        jmp   @r2                ; tail-call MUTE_ENTRY (rts returns to
+    file 0x13E1C6:  00 09        nop                      ;   the dispatcher's caller — correct,
+    file 0x13E1C8:  00 00 00 00  (pad, keep .long 4-aligned)   arm restored pr first)
+    file 0x13E1CC:  0C 04 89 56  .long 0x0C048956
+    full hex @0x13E1C0:  E406 D202 422B 0009 0000 0000 0C048956
+
+MUTE_ENTRY @ 0x0C048956 (CLEAN, int f(uint flags /*r4*/)); r4=0x06 -> clear 100 voice slots
+(cut sustaining voices) + call FUN_0c0440c6 (stop sequencer/transport). See §1 of prior notes.
+
+##############################################################################
+## 4. EMULATION — CODE 0x01 HOOKED PATH (armhook01_emu.txt)
+##############################################################################
+Entered FUN_0c0c9e60 with a scratch assignment record whose function-code byte = test value, the
+literal at 0x0C0CA120 repointed to the trampoline, and the trampoline bytes written.
+
+  PATCHED, padFunc=0x01:
+     TRACE: 0x0C0C9E60 dispatch -> reads code -> `cmp/eq 0x1,r0; bt 0x0C0C9F4E` -> arm 0x01 latches
+     code (mov.b r0,@(0x1,r11)) -> epilogue (lds.l pr; pop r14/r13/r12) -> jmp @r2 -> 0x0C13E1C0
+     trampoline -> MUTE_ENTRY reached with r4=0x06 -> voiceLoop=TRUE (100 iters) +
+     transportStop(FUN_0c0440c6)=TRUE.
+  PATCHED, padFunc=0x01, CONTROL-FLOW-ONLY (all mute leaves stubbed):
+     mute=TRUE, loop=TRUE (100 iters), transportStop=TRUE, reached MUTE epilogue 0x0C048ADC,
+     **cleanReturn=TRUE** (returns through the arm-restored pr to the dispatcher's caller). DEFINITIVE.
+  UNPATCHED, padFunc=0x01:  normal arm, NO trampoline, NO mute  (baseline).
+  PATCHED, padFunc=0x08:    takes its OWN arm (0x0C0CA026), NOT stop-all -> hook is SURGICAL,
+     other function codes unaffected.
+
+##############################################################################
+## 5. EXACT code.bin BYTE PATCHES (code 0x01)
+##############################################################################
+  (1) HOOK — repoint arm-0x01 literal:
+        code.bin offset 0x0CA120 (.PGM 0x0CA1A0):  0C 0C 74 4E  ->  0C 13 E1 C0
+  (2) TRAMPOLINE — write into free space:
+        code.bin offset 0x13E1C0 (.PGM 0x13E240):
+            00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+         -> E4 06 D2 02 42 2B 00 09 00 00 00 00 0C 04 89 56
+  (3) .PGM checksum: recompute after editing (firmware/pgm_checksum.py).
+  ACTIVATION: pad set to function code 0x01 (Kit Increment) — pad 1 already reads 0x01 per the
+  live dump-diff, so ZERO post-flash setup for that pad. (But see §0/§6: this fires on config-apply,
+  not on strike.)
+
+  FUNCTION-CODE VALUE for the live dump-diff to verify: **0x01** (cat 0x02 / idx = pad-1 / off 0x00).
+
+##############################################################################
+## 6bis. STATIC RAM-TABLE RECONSTRUCTION ATTEMPT (2026-06-24) — IMPORTANT UPDATE
+##############################################################################
+Per the no-hardware plan, I tried to resolve the indirect targets by reconstructing the app's
+data-init / static tables. KEY RESULTS (evidence: datainit.txt, reloctable.txt, vtable.txt,
+tblowner.txt, staticxref.txt):
+
+  (1) NO classic _INITSCT relocation table. code.bin has NO stride-12 {rom_src,rom_end,ram_dst}
+      DTBL run (verified: 0 genuine runs). So the "ROM->RAM copy table" route does not apply here.
+
+  (2) BUT — the "RAM-vtable blocker" was PARTLY a Ghidra-analysis ARTIFACT, not all real. MANY of
+      the `(*PTR_FUN_xxxx)()` / `(*DAT_xxxx)()` calls that LOOK indirect are actually STATIC calls:
+      the pool entry holds a FIXED code address in code.bin, loaded by `mov.l @(disp,pc),rN`.
+      Ghidra simply did not materialize these literal-pool loads as call references, which is why
+      every getCallingFunctions() climb dead-ended. Proven: e.g. FUN_0c04f306 loads 0x0C044022
+      (the seq toggle) from its own PC-relative pool @0x0C04F334 and calls it — a fully static,
+      resolvable call (classify of its pool: most entries = CODE, only buffers = RAM).
+
+  (3) I built a whole-image static-pool call resolver (scan every `mov.l @(disp,pc)`, resolve EA,
+      record edges into code pointers) and recovered the TRUE static caller sites the call graph
+      missed:
+        FUN_0c044022 (toggle)         <- 0x0C04F334, 0x0C04F6B2, 0x0C050848, 0x0C05EEC4
+        FUN_0c0440de (seq-top)        <- 9 sites in 0x0C051..0x0C05C
+        FUN_0c0440c6 (transport-stop) <- 0x0C048A48  (i.e. ONLY the mute routine MUTE_ENTRY &4 path)
+      => The static call graph IS largely recoverable; the earlier "vtable wall" was overstated.
+
+  (4) HOWEVER, all recovered callers of the seq/transport actions remain in the SEQUENCER/SONG
+      subsystem (0x0C04F..0x0C05C). The per-physical-STRIKE pad-function dispatcher (UTIL4-1
+      control-function-on-hit) still did not surface, because the TRIGGER-ISR -> pad-event ENTRY
+      routes through the FEW GENUINELY RAM-resident dispatch cells (e.g. 0x0C0450EC, and the pad
+      object at/near 0x0C311B8C) whose contents ARE boot-populated and ARE NOT in code.bin (no
+      code loads them as literals; no relocation table fills them). Those specific cells = the
+      remaining wall.
+
+  (5) Static vtables (runs of function pointers) DO exist in code.bin (vtable.txt: e.g. 0x0C02B498
+      with the transport actions), but none of their base addresses appears as a literal anywhere
+      in code.bin (0 occurrences each) — they are reached as object+offset where the OBJECT's
+      vtable pointer is a RAM cell set at boot. So those particular vtables are not statically
+      bindable to a concrete call site from code.bin alone.
+
+  HONEST VERDICT: a chunk of the project's "RAM dispatch" is actually static and followable with a
+  pool-aware resolver (worth doing for general RE), BUT the last hop — trigger ISR -> which pad
+  object / which dispatch — genuinely depends on boot-initialized RAM cells that are NOT populated
+  by code in code.bin (no _INITSCT, no literal loads). For THAT hop, JTAG (or a live trace) is
+  unavoidable. The §6.2 live-trace recipe below stands as the way to close it.
+
+##############################################################################
+## 6. PER-STRIKE PAD-FUNCTION DISPATCHER — SEARCH RESULT (2026-06-24)
+##############################################################################
+RESULT: the per-physical-strike pad-function dispatcher could NOT be pinned by static analysis.
+The trigger-ISR -> pad-event entry routes through boot-initialized RAM dispatch cells that are NOT
+populated by any code in code.bin (no _INITSCT relocation table; the cells' contents appear nowhere
+as literals). Note (per §6bis): much of the rest of the indirect-call graph IS statically
+resolvable — the earlier "everything is a RAM vtable" framing was partly a Ghidra artifact — but
+the final trigger->dispatch hop specifically remains RAM/boot-dependent. Below is what was tried
+and the live-trace recipe to close it on hardware.
+
+### 6.1 What was tried (all cheap static approaches, evidence files in firmware/)
+  A) ACTION-anchor (strikedisp.txt, actiondisp.txt): the strongest 0..N switch in the engine
+     region is FUN_0c04dda2 @0x0C04DDA2 — but it turned out to be the CONTROLLER/PARAMETER-APPLY
+     engine (clamps an incoming value into [min,max] from per-parameter table PTR_DAT_0c04e434,
+     indexed by a 0..0x2C parameter number) and its caller FUN_0c04dca4 is a MIDI value-apply
+     path, NOT a pad-function-on-hit switch. Its action handlers (FUN_0c04e1f2/e2c6/e378/e3d2)
+     write voice/effect parameter cells, not tempo/click/kit on a strike.
+  B) FIELD-reader xref (strikepath.txt): the UI config block the arms write (RAM 0x0C311B8C) is
+     read ONLY by 0x0C0Cxxxx UI/display functions — no engine/strike reader.
+  C) TRIGGER-path climb (padctrl.txt, trigpath.txt): climbing from the seq/transport actions
+     (FUN_0c04f306/FUN_0c044570/FUN_0c044938/FUN_0c05a10a) reaches the SEQUENCER RECORD/PLAYBACK
+     and SMF-event engine (event types 0x7F/0x7D/0x3F, F1/F2 markers, song-position), not the
+     per-physical-hit pad-function path. These top functions have 0 static callers.
+  D) TEMPO-var anchor (tempovar.txt): no clean "load tempo; +step; clamp ~300; store" handler
+     surfaces; the closest funcs dispatch through object vtables `(**(code**)(objptr+off))()` with
+     `unaff_rN` object pointers and 0 static callers.
+  STRUCTURAL PROOF (verified): the candidate dispatchers have 0–2 literal references and no clean
+  trigger-path caller; the strike dispatch is `jsr @rN` through boot-initialized tables. Static
+  call-graph reconstruction terminates at these computed calls — cannot be followed offline.
+
+### 6.2 LIVE-TRACE RECIPE (what to capture on hardware to pin the strike dispatcher)
+Goal: catch the instruction where a pad HIT reads the pad's function code and dispatches the
+action, so we can hook THAT (call the trampoline -> MUTE_ENTRY(r4=0x06)).
+
+  PREP on the unit:
+   - Assign ONE pad (say pad 1) a CONTROL pad function with an observable, idempotent effect.
+     Best choice: **Tempo Increment** (the chosen function) or **Click On/Off** — each mutates a
+     single runtime cell on every hit, so a data watchpoint fires per strike.
+   - Put the unit in a steady state (a kit loaded, sequencer stopped) so background writes are minimal.
+
+  WATCHPOINTS (RAM addresses to break on, found statically):
+   - Runtime sequencer tempo/length source cell: **0x0C2BFE94** (DAT_0c044df0; 14-bit tempo =
+     [0x0C2BFE94]<<7 | [0x0C2BFE95]). A "tempo increment" strike should WRITE here -> the writing
+     instruction's function = the tempo-inc ACTION handler.
+   - UI pad-function config block: **0x0C311B8C** (sanity: should NOT change on a hit, only on edit).
+   - For Click On/Off instead: watch the metronome/click enable cell (resolve by diffing which RAM
+     byte flips when you toggle click via a pad — capture before/after).
+
+  CAPTURE METHOD (any one):
+   - JTAG/on-chip debugger (SH-2A H-UDI) with a hardware DATA watchpoint on 0x0C2BFE94: strike the
+     pad, break on write, read the PC + call stack -> that PC is in the strike pad-function action
+     handler; walk up one frame to the dispatcher (the switch on the function code). That switch is
+     the hook site.
+   - OR emulate-with-input: if the trigger ISR + AD-input path can be driven in the Ghidra/QEMU
+     emulator with a synthetic pad-hit event, single-step from the trigger entry to the function-
+     code read. (Higher effort; the input path itself is vtable-gated, so JTAG is preferred.)
+
+  WHAT THE TRACE YIELDS: the exact engine function + instruction that reads the pad-function code
+  on a hit and branches to the action. Hook design then mirrors §2-§3: either repoint that switch's
+  per-code target (if it uses a literal/table like FUN_0c0c9e60) or insert a `bsr trampoline` at the
+  code-0x01 arm of THAT switch. The trampoline + MUTE_ENTRY(r4=0x06) (sections 3-4, fully emulated)
+  are unchanged and reusable as-is.
+
+### 6.3 INTERIM OPTIONS (work without pinning the strike dispatcher)
+  - LAPTOP-IN-LOOP (works today, zero firmware risk): set the pad to transmit a unique MIDI CC on
+    strike; laptop catches it and sends All-Sound-Off (CC120) + a pattern Stop back to the M12.
+    Not standalone, but exercises the EXACT desired behavior to confirm it's wanted before flashing.
+  - CONFIG-LAYER hook (sections 1-5, emulated): fires when the pad function is APPLIED in the edit
+    UI, not per strike — useful only if "apply once" semantics are acceptable (they are not, for
+    "on a pad strike"). Documented for completeness; NOT recommended as the feature-6 hook.
+
+### 6.4 ORIGINAL gap notes (retained)
+A true "on strike" hook must live in the strike engine where a trigger reads the pad's runtime
+function setting and acts. Pinning that needs one of:
+  (a) the live trace in §6.2 (recommended); OR
+  (b) more static RE down the trigger-ISR -> pad-event path (the strike path runs through RAM
+      function-pointer tables, which defeats static call-graph — same blocker documented for the
+      pad-strike dispatcher generally).
+Until then, the code-0x01 arm hook is correct only for the EDIT/APPLY moment, not per-strike.
+RECOMMENDATION: confirm the desired trigger semantics on hardware (or via the laptop-in-loop
+path) before committing this hook to flash, OR pin the engine-side reader first.
+
+##############################################################################
+## 7. RISK / CONFIDENCE
+##############################################################################
+- MUTE PRIMITIVE (MUTE_ENTRY r4=0x06) + TRAMPOLINE: CONFIDENCE HIGH, emulated end-to-end
+  (100-iter voice-clear + transport-stop + clean return). RISK LOW.
+- CODE-0x01 ARM HOOK (literal repoint): the MECHANISM is HIGH-confidence and surgical (emulated:
+  dispatch->arm 0x01->trampoline->mute->clean return; code 0x08 unaffected). BUT its LAYER is
+  config/apply, not strike (§0) — so CONFIDENCE that it satisfies "on a pad strike" is LOW until
+  §6 is resolved.
+- Caveat: emulation stubs the boot-pointer leaves that do the actual voice/seq register writes;
+  their side effects are read from the decompile, not executed (but they are the firmware's own
+  all-sound-off machinery).
+- DO NOT FLASH until the layer question (§6) is resolved and the .PGM checksum recomputed. Keep
+  the pristine .PGM.
+
+##############################################################################
+## 8. GHIDRA SCRIPTS / EVIDENCE (firmware/ghidra_scripts/)
+##############################################################################
+  EnumArms.java   -> enumarms.txt      : ALL 17 arms (0x00-0x10) + high codes, structure + literals
+  Classify.java   -> classify.txt      : CALLER_OF_DISPATCH = UI message handler (config layer)
+  StrikePath.java -> strikepath.txt    : dispatch is UI-cluster-only, no engine refs
+  MuteEntry.java  -> muteentry.txt     : pinned TRUE clean mute entry 0x0C048956
+  F6Emu.java      -> f6_emu.txt         : mute (r4=0x02/04/06) + trampoline emulation
+  ArmHook01.java  -> armhook01_emu.txt  : CODE-0x01 full hooked-path emulation
+  ArmHook.java    -> armhook_emu.txt    : (prior code-0x07 emulation, same mechanism)
+  -- per-strike dispatcher search (2026-06-24, §6) --
+  StrikeDisp.java -> strikedisp.txt    : engine-region 0..0x10 switch candidates
+  ActionDisp.java -> actiondisp.txt    : FUN_0c04dda2 = controller/param-apply (not pad-func-on-hit)
+  PadCtrl.java    -> padctrl.txt        : pad-control caller chains -> seq record/playback engine
+  TrigPath.java   -> trigpath.txt       : FUN_0c044570/938/05a10a = SMF/record engine, 0 static callers
+  TempoVar.java   -> tempovar.txt       : tempo-var hunt -> vtable-gated init funcs, 0 static callers
+  -- static RAM-table reconstruction (2026-06-24, §6bis) --
+  DataInit.java   -> datainit.txt       : copy/zero loop scan (no C-runtime startup relocator found)
+  RelocTable.java -> reloctable.txt     : NO _INITSCT DTBL; lists static vtables + low/init funcs
+  Vtable.java     -> vtable.txt          : static function-ptr arrays (vtables) in code.bin; none bound by literal
+  TblOwner.java   -> tblowner.txt        : table owners — "DAT_" cells are mostly static fn ptrs, not RAM
+  PadFnTbl.java   -> padfntbl.txt        : indexed-dispatch table scan
+  StaticXref.java -> staticxref.txt      : static-pool xref; recovered true callers of seq/transport actions

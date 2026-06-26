@@ -1,0 +1,84 @@
+================================================================================
+MIDI "STOP ALL PATTERNS" HOOK — FEASIBILITY NOTE (DTX-MULTI 12, code.bin)
+SH-2A BE, base 0x0C000000. file_off = RAM - 0x0C000000.  ANALYSIS ONLY — no flashing.
+Ghidra project: firmware/ghidra_proj_midi/midi_proj. Evidence: midirx.txt, ccrx.txt,
+ccrx2.txt, ccrx3.txt, rxentry.txt, rxentry2.txt.
+================================================================================
+
+## 0. CONTEXT / SCOPE CHANGE
+The PRIMARY solution is now no-firmware: forScore can send raw hex, so it sends the single
+System-Real-Time byte 0xFC (Stop), which the M12 handles natively (realtime handler
+FUN_0c044c08 -> stop). This note is the BACKUP CC-receive-hook feasibility check only.
+It is intentionally short: I did the reachability analysis, NOT the full byte-exact design
++ emulation, because the 0xFC path likely wins.
+
+## 1. IS THE CC-RECEIVE HANDLER STATICALLY REACHABLE?  --> NO (same wall as pad-strike)
+The task premise ("MIDI-RECEIVE path is statically reachable, unlike pad-strike") does NOT
+hold for this image. Evidence:
+
+  a) RX channel-message dispatcher = switchD_0c03cdbc (the braf jump table @0x0C03CDC8,
+     indexed by MIDI status nibble). I decoded the table (ccrx2.txt):
+        idx0 0x80 NoteOff -> 0x0C03D23E      idx4 0xC0 ProgChg  -> arm
+        idx1 0x90 NoteOn  -> 0x0C03CDE8      idx5 0xD0 ChanAT   -> arm
+        idx2 0xA0 PolyAT  -> 0x0C03CDE8      idx6 0xE0 PitchBnd -> arm
+        idx3 0xB0 CtrlChg -> 0x0C03D23E      idx7 0xF0 sysex/rt -> arm
+     The Control-Change arm (idx3, status 0xB0) targets 0x0C03D23E == caseD_f0, which
+     decompiles to an EMPTY no-op `return;` (ccrx3.txt). So at THIS dispatcher a received CC
+     does nothing — there is no per-CC-number switch here to hook.
+
+  b) The whole dispatcher + the MIDI-input routine that drives it have NO clean enclosing
+     function. Ghidra cannot bind a prologue for switchD_0c03cdbc, for the input routine
+     around 0x0C05A540..0x0C05A590 (which bsr's the SMF/record engine FUN_0c05ad18 at
+     0x0C05A578), or for that call site (rxentry.txt / rxentry2.txt: "func containing
+     0x0C05A578: NONE").
+
+  c) The realtime handler FUN_0c044c08 (FA/FB/FC/F8) is referenced by exactly ONE literal,
+     at 0x0C05AFCC (rxentry2.txt). That literal is a FUNCTION-POINTER-TABLE entry loaded into
+     a register and called via `jsr @rN` — i.e. the RX handlers are reached through a
+     boot-initialized RAM dispatch vector, not a static call chain. literal scans for
+     0x0C05A578 and 0x0C05AD18 = 0 occurrences (computed/RAM dispatch, not statically bound).
+
+  CONCLUSION: the received-MIDI entry routes through boot-populated RAM function-pointer
+  tables — the identical static-call-graph wall documented for the pad-strike path in
+  FEATURE_6_7_FINDINGS.md. The CC-receive handler is NOT statically reachable in code.bin.
+  (The handlers themselves are present and disassemble; what is missing is a STATIC hook
+  site on the incoming path with a clean enclosing function to patch.)
+
+## 2. WHERE A "CC# -> FUN_0c0440c6" HOOK WOULD GO (IF pinned via JTAG/live-trace)
+The mechanism is sound; only the hook SITE needs a hardware trace to pin (same recipe as
+feature 6, §6.2). Given the site, the patch is small and the primitives are already proven:
+
+  - Stop primitive: FUN_0c0440c6 (RAM 0x0C0440C6, 20 ins) = sequencer all-stop + transport
+    reset. CLEAN (confirmed here: decompile is self-contained; its only static caller is the
+    mute routine at 0x0C048A48). Callable from a trampoline with no MIDI/pad context regs.
+    (Or use MUTE_ENTRY @0x0C048956 with r4=0x04 to get transport-stop, or r4=0x06 to also cut
+     sustaining voices — both already emulated clean in feature6_patch.txt.)
+  - Hook shape: at the pinned per-CC-number compare arm, insert `bsr trampoline; nop` (or
+    repoint a per-CC dispatch literal if the real RX-CC handler uses a table like
+    switchD_0c03cdbc does). Trampoline (in free space 0x0C13E000-0x0C140000, ~8KB all-zero,
+    in-image) loads FUN_0c0440c6 via PC-relative literal, jsr/n @rN, rts. ~6-10 B hook +
+    ~14 B trampoline. Mind the SH-2A delay slot after bsr/jsr.
+  - Choose CC 80 (decimal) "General Purpose Controller 5", value 127. It is undefined on the
+    DTX (not in 0,1,4,7,10,11,32,64,71-75,91,93,94,96,97,120-127, bank/data-entry). CC 80-83
+    are the safest "general purpose" range to repurpose.
+
+## 3. CONFIDENCE / NOTES
+  - That the RX path is boot-RAM-gated (no static hook site): CONFIDENCE HIGH (three
+    independent signatures above).
+  - That the stop primitive + trampoline would work once a site is pinned: CONFIDENCE HIGH
+    (FUN_0c0440c6 clean; trampoline mechanism already emulated end-to-end for feature 6).
+  - Net feasibility of the CC hook WITHOUT hardware: LOW — it needs a JTAG/live data-watchpoint
+    trace to pin the per-CC dispatch instruction, exactly like the pad path. NOT doable from
+    code.bin alone.
+  - Native behavior check: only System-Real-Time Stop (0xFC) natively stops the sequencer
+    (FUN_0c044c08). A received Note does NOT stop transport (the NoteOn/Off arms idx0/idx1 go
+    to event-record handlers, not transport-stop). So a note/CC-only sender genuinely needs
+    either the 0xFC byte or this hook.
+
+## 4. RECOMMENDATION
+Use the no-firmware path: configure forScore to send raw hex byte 0xFC (single-byte System
+Real-Time Stop) on the stop button. No CC, no firmware patch. If iOS/CoreMIDI proves it won't
+reliably transmit single-byte real-time messages from forScore, the CC hook is feasible only
+after a hardware JTAG/live-trace pins the RX-CC dispatch site (§2); it cannot be finalized
+offline from code.bin because the MIDI-receive path is boot-RAM-gated.
+================================================================================

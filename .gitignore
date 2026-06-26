@@ -1,0 +1,60 @@
+# =====================================================================
+# Yamaha-copyrighted material — NEVER redistribute.
+# Reverse-engineering my own device is fine; shipping Yamaha's firmware,
+# sample ROM, or docs is not. The repo publishes MY tools + writeups +
+# the patch as a documented diff (offset/bytes), never the binaries.
+# =====================================================================
+
+# Firmware images (stock + patched) and extracted code
+*.PGM
+*.bin
+firmware/code.bin
+
+# Ghidra project + raw firmware-derived dumps (disassembly / decomp / RE evidence)
+firmware/ghidra_proj/
+firmware/re_evidence/
+firmware/decomp.txt
+firmware/force.txt
+firmware/callers.txt
+firmware/sysex_dump.txt
+firmware/disasm.txt
+firmware/ghidra_dump.txt
+firmware/param_labels.txt
+
+# Yamaha factory sample ROM (the M12 voices)
+samples/
+
+# Yamaha documentation (Data List, service manual, …)
+*.pdf
+
+# User M12 save files — embed Yamaha factory waveform ROM (DWAV chunk)
+saves/
+*.MTA
+
+# Extracted text derived from the Yamaha service manual / data list
+docs/decoded.txt
+docs/sm_text.txt
+
+# =====================================================================
+# Captures & generated output — large and/or device-sample-derived.
+# Host audio/video demos externally (link them); don't commit them.
+# =====================================================================
+midi_capture.log
+midi-tools/captures/
+loops/generated/
+loops/streamed/
+**/*.syx
+**/*.wav
+**/*.mid
+
+# =====================================================================
+# Environment / models / cruft
+# =====================================================================
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+*.ckpt
+*.pt
+*.onnx
+models/
