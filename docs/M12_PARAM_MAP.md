@@ -92,6 +92,19 @@ read-back 85 → restored 94 → read-back 94. Full live parameter control (read
 verified and reversible. **The computer-side producer can now drive the M12's parameter
 surface directly over USB — no thumb drive.**
 
+### Full-kit build + STORE over SysEx — VERIFIED LIVE (2026-06-26)
+Built kit U100 entirely over SysEx (voice cat/num + volume + pan on 24 cat-0x10 slots) and
+**the kit NAME** (`User Kit` → `SYSEX100`), confirmed audible via the Scarlett, pressed panel
+**[STORE]**, then switched away (kit 1 = `CHURCH`) and reloaded U100 **from flash** → name +
+voices persisted. Conclusions:
+- **Kit NAME field is WRITABLE over SysEx** (cat 0x14, off 0x00–0x0F). New — earlier only the
+  tempo field in cat 0x14 was tested, and that is read-only.
+- **Kit SELECT over MIDI confirmed** (Bank MSB 125 / LSB 1 = user 1–100, LSB 2 = 101–200; then
+  Program Change = kit−1; channel 10) — read back via cat 0x14 name after each switch.
+- **STORE has NO MIDI/SysEx command** — edit-buffer writes are volatile until a front-panel
+  [STORE]. Proven by switching kits without storing → build discarded.
+- ⇒ build = SysEx, select = MIDI, but the edit-buffer→flash commit is a one-button panel step.
+
 ## Pad Function field (located by diff, 2026-06-24)
 Per-pad **Pad Function (UTIL4-1)** code = **cat 0x02, idx = pad number, offset 0x00** (first
 byte of the 6-byte cat-0x02 per-trigger record). Known values: tap-tempo=0x07, click-On/Off=

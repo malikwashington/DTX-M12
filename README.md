@@ -1,91 +1,108 @@
-# DTX-MULTI 12 — prompt-driven producer & firmware toolkit
+# DTX-MULTI 12 — live-rig automation, reverse-engineered
 
-A computer-side toolkit for the Yamaha **DTX-MULTI 12** (M12) percussion module, built around
-recovering the device's **undocumented SysEx parameter surface** and statically
-**reverse-engineering its firmware**. Two threads sit on that foundation:
+**Turn the page of your charts and your drum rig reconfigures itself** — the right kit, sounds, and
+tempo load for each song, hands-free, across a whole show. This is the computer-side toolkit that
+makes that work for a Yamaha **DTX-MULTI 12** (M12) percussion module driven from an iPad.
 
-1. **A generative percussion-loop producer** — role-based gospel/R&B loops the user plays
-   standalone on the M12 while drumming kick/snare/hat live.
-2. **A control + RE + firmware-patching toolkit** — drives the M12's full parameter surface over
-   USB SysEx, and patches the firmware for behavior the parameters can't reach.
+It sits on **four reverse-engineered surfaces across two vendors** — the M12's SysEx protocol, its
+firmware, its `.MT*` save format, and forScore's `.4sb` backup format — plus a generative
+percussion-loop producer that programs the kits.
 
-The device's parameter protocol is undocumented by the vendor, so it was recovered three
-independent ways that cross-check each other.
-
-> **Scope & legal.** This reverse-engineers a DTX-MULTI 12 I own, for interoperability and
-> research. **No Yamaha firmware image, sample ROM, or documentation is included in this
-> repository** — only my own tools and findings, with the firmware patch described as a diff
-> (offset + bytes), never a redistributable binary.
+> **Scope & legal.** This reverse-engineers a DTX-MULTI 12 and a forScore library **I own**, for
+> interoperability and research. **No Yamaha firmware image, sample ROM, or documentation, and no
+> forScore backups or library data, are included in this repository** — only my own tools and
+> findings, with the firmware patch described as a diff (offset + bytes), never a redistributable
+> binary.
 
 ---
 
-## The reverse-engineering chain
+## What it does in a show
 
-### 1. Protocol interception (man-in-the-middle)
-`midi-tools/m12_midi_spy.py` is a MITM monitor/bridge placed between the iPad control app and the
-M12 over USB MIDI, used to recover the app↔device protocol from live traffic. That capture yielded
-the SysEx model `7F 0F` surface:
+forScore (the iPad chart reader) **natively** sends a kit-select MIDI message when you open a chart,
+and the M12 selects a kit from it. Those are the vendors' own features. The work here is **programming
+both sides in bulk** so an entire setlist is wired at once instead of tapped in by hand across 70+
+charts on a screen smaller than your pinky:
+
+```
+midi-tools/setlist_sync.py  SHOW.4sb  --save SHOW.MTA  --setlist "Sula and the Joyful Noise"
+```
+
+For each chart in the setlist, in order, it:
+1. finds the M12 kit **named after the song** (or, with `--by-order`, the Nth kit),
+2. writes that kit's **Program Change** into the chart's forScore MIDI Send (fired on page-open),
+   led by a **Stop** byte so the prior pattern halts first,
+3. sets that kit's **tempo** in the M12 save from the chart's stored BPM.
+
+Output is a new `.4sb` and a new save file (the inputs are never touched); `--dry-run` prints the
+plan first. Restore the `.4sb` in forScore and load the save on the M12, and the show drives itself
+on page-turns.
+
+---
+
+## The reverse-engineering foundation
+
+Four undocumented surfaces, each recovered independently.
+
+### 1. The M12 SysEx protocol — `midi-tools/m12_control.py`, `m12_midi_spy.py`
+`m12_midi_spy.py` is a man-in-the-middle bridge placed between the iPad app and the M12 over USB
+MIDI; it recovered the app↔device protocol from live traffic. The recovered surface (model `7F 0F`):
 
 ```
 param write    F0 43 1n 7F 0F aH aM aL dd F7          (single parameter, no checksum)
 dump request   F0 43 2n 7F 0F aH aM aL F7             (module replies with bulk blocks)
-bulk block     F0 43 0n 7F 0F cH cL aH aM aL [data] chk F7
+bulk block     F0 43 0n 7F 0F cH cL aH aM aL [data] chk F7      chk = (−Σ) & 0x7F
 ```
-Address = `(category, index, offset)`; `chk = (−Σ(cH..last data)) & 0x7F`.
+`m12_control.py` is the live read/write library over that protocol (`read_pad`, `set_pad`,
+`set_voice` against the category-`0x10` per-pad voice block).
 
-### 2. Firmware reverse-engineering (Ghidra, offline)
-Static RE of the updater image `8H39OS_.PGM` — **offline only, no writes to the device** —
-reconstructed its structure and confirmed the protocol from the other direction:
+### 2. The M12 firmware — Ghidra RE + a shipped patch (`firmware/`)
+Static RE of the updater image `8H39OS_.PGM` (**offline only, no writes to the device**)
+reconstructed its structure and **confirmed the protocol from the other direction**:
 
 | fact | value |
 |---|---|
 | container | `InstallerFile` wrapper, 0x80-byte header (checksum @`0x64`, size @`0x68`) |
 | code image | first `0x140000` of payload (`code.bin`); remainder ≈ 6.9 MB wave ROM / preset data |
-| CPU | SH-2A, **big-endian** |
-| load base | `0x0C000000` (SDRAM / CS3); `RAM = file_off − 0x80 + 0x0C000000` |
+| CPU | SH-2A, **big-endian**; load base `0x0C000000` (SDRAM / CS3) |
 | functions | 2531 (Ghidra auto-analysis) |
 
-The load base was validated two ways: PC-relative literal pointers cluster in
-`0x0C000000–0x0C2FFFFF` (~34k of 38k), and at that base they resolve to real strings and to
-`sts.l pr,@-r15` function prologues.
-
-The key result: the SysEx **transmit builder `FUN_0c023106`** emits exactly the frame format above
-(model group `7F 0F`, `count = (cH<<7)|cL`, `chk = (−Σ)&0x7F`). **This independently confirms, from
-the firmware, the protocol that was first recovered from the MITM capture** — the same wire format
-arrived at two ways: from traffic, and from the code that produces it. A label pool at
-`0x0C08DFE8…0x0C08FB78` yielded **176 parameter labels** (RevTime, Cutoff, Resonance, ChoPan, …).
-
-Static RE has a documented limit: the parameter dispatch runs through **RAM-resident
-function-pointer tables populated at boot**, so the complete `(cat,index,param) → storage` map only
-exists at runtime — it is captured live and decoded by `m12_dump_decode.py` (checksum-verified;
-`--selftest` passes).
-
-### 3. A feature shipped via firmware patch
-`firmware/experiment/8H39OS_.PGM` is a patched build adding **Feature 7**: re-striking a playing
-pattern restarts it from the top instead of stopping.
+The SysEx **transmit builder `FUN_0c023106`** emits exactly the frame format above — so the wire
+format was arrived at **two independent ways**: from intercepted traffic, and from the firmware code
+that produces it. A patched build (`firmware/experiment/`) adds **Feature 7** (re-striking a playing
+pattern restarts it instead of stopping):
 
 ```
-patch:  code.bin 0x44038   8B 1C  ->  00 09        (NOP the pattern-toggle stop branch)
-        installer checksum (@0x64) + size header (@0x68) recomputed so the device accepts the image
-        PROG block only; BOOT untouched
+patch:  code.bin 0x44038   8B 1C -> 00 09   (NOP the pattern-toggle stop branch)
+        installer checksum + size header recomputed; PROG block only, BOOT untouched
 ```
-Because only the PROG block changes and BOOT is untouched, a bad patch re-flashes cleanly from the
-archived pristine image — i.e. **recoverable by design**. *Status: built and checksum-validated;
-on-hardware flash-test is the open item.* A related feature (stop all patterns) was solved without
-firmware — forScore sends raw MIDI `FC` (Stop) with `UTIL6-8 SeqCtrl = in`.
+Recoverable by design (BOOT untouched). *Status: built + checksum-validated; on-hardware flash-test
+is the open item.*
+
+### 3. The M12 save format (YSFC) — `midi-tools/ysfc.py`
+The M12's USB save files (`.MTA` all-data, `.MTK` kit, `.MTP` pattern, `.MTW` wave) are undocumented
+**YSFC** containers. `ysfc.py` reverse-engineers the chunk directory and the kit / waveform / pattern
+catalogs (byte-verified against a known save), **extracts waveforms to WAV**, and performs a proven
+**checksum-free per-kit tempo edit** (the format carries no save checksum) — the save-side write the
+orchestrator uses to set each kit's tempo.
+
+### 4. The forScore `.4sb` backup format — `midi-tools/forscore_4sb.py`
+forScore's backup is a flat `<--4SBV02-->` container whose first member is a binary-plist metadata
+store (titles, keywords, setlists, per-chart MIDI Sends). `forscore_4sb.py` **round-trips it
+byte-identically** (a no-op edit is bit-for-bit; `verify` asserts it), decodes the per-chart
+kit-select Send (an `NSKeyedArchiver` array of `{value, kind}` commands), and edits those Sends in
+bulk — re-compressing only the one member it changes. That's how a whole setlist's page→kit mappings
+get programmed without opening forScore. See `midi-tools/forscore_4sb_README.md`.
 
 ---
 
-## The producer (loop generation)
-
-`loop-pipeline/role_producer.py` is the generator: role-based gospel/R&B percussion, rendering a
-stereo preview with the **real M12 voice samples + applied voice parameters**, plus `.mid` and
-`.params.json`. Tone design exploits the recovered parameter surface — **voice = sample × cat-`0x10`
-params** — so the timbral palette is far larger than the 99 raw samples (a "snap" is a clap with a
-tight envelope and a resonant filter). `groove_producer.py` mines style envelopes from reference
-loops; the feel rules (steady timekeeper pulse, space carried by the ornament roles, backbeats
-carrying a subtle voice) define quality over grid statistics. A `/make-loop` skill and a
-`groove-producer` subagent wrap the generator.
+## The producer (loop generation) — `loop-pipeline/`
+`role_producer.py` generates role-based gospel/R&B percussion loops, rendering a stereo preview with
+the **real M12 voice samples + applied voice parameters**, plus `.mid` and `.params.json`. Tone
+design exploits the recovered parameter surface — **voice = sample × cat-`0x10` params** — so the
+palette is far larger than the raw samples (a "snap" is a clap with a tight envelope + resonant
+filter). `groove_producer.py` mines style envelopes from reference loops; the feel rules (steady
+timekeeper pulse, space in the ornament roles, backbeats carrying a subtle voice) define quality over
+grid statistics. A `/make-loop` skill + `groove-producer` subagent wrap the generator.
 
 ```
 cd loop-pipeline && ../.venv/bin/python3 role_producer.py compose --bpm 80 --meter 44 --out test
@@ -94,26 +111,29 @@ cd loop-pipeline && ../.venv/bin/python3 role_producer.py compose --bpm 80 --met
 ---
 
 ## Layout
-- `loop-pipeline/` — the generator (`role_producer.py`), style mining (`groove_producer.py`), output in `loops/generated/`.
-- `samples/` — 99 real M12 voice WAVs (the renderer's voices).
-- `midi-tools/` — live control + capture: `m12_control.py` (read/write API), `m12_dump_request.py`, `m12_dump_decode.py`, `m12_midi_spy.py` (the MITM bridge). See `midi-tools/README.md`.
-- `firmware/` — RE + patching: `8H39OS_.PGM` (**pristine recovery image — do not modify**), `experiment/` (patched Feature-7 build), `code.bin`, `pgm_checksum.py`, `sh2a_xref.py`, `ghidra_proj/`, `ghidra_scripts/`, `re_evidence/`.
-- `docs/` — `FIRMWARE_RE.md`, `M12_PARAM_MAP.md`, `STATUS.md`, `RECOVERY.md`, the Data List + service manual.
+- `midi-tools/` — the integration + control layer: `setlist_sync.py` (the orchestrator),
+  `forscore_4sb.py` (.4sb RE + editor), `ysfc.py` (M12 save RE), `m12_control.py` (live SysEx API),
+  `m12_midi_spy.py` (the MITM bridge), `m12_dump_decode.py` (checksum-verified dump decoder).
+- `loop-pipeline/` — the producer (`role_producer.py`, `groove_producer.py`); output in `loops/`.
+- `firmware/` — RE + patching: `pgm_checksum.py`, `sh2a_xref.py`, `ghidra_scripts/`, `experiment/`
+  (the Feature-7 build). **Yamaha binaries are git-ignored** (`*.PGM`, `code.bin`, sample ROM).
+- `docs/` — `FIRMWARE_RE.md`, `M12_PARAM_MAP.md`, `DOSSIER.md`, `RECOVERY.md`, `STATUS.md`.
 
 ## Toolchain (reproducible)
-- **Ghidra 12.1.2** project at `firmware/ghidra_proj/M12` — import `code.bin` as `SuperH:BE:32:SH-2A`, base `0x0C000000`. Reusable GhidraScripts in `firmware/ghidra_scripts/` (`DumpRE`, `FindSysex`, `Decomp`, `Callers`, …).
-- `firmware/sh2a_xref.py` — pure-Python SH-2A literal xref engine (base `0x0C000000`).
-- `firmware/pgm_checksum.py` — installer checksum/size recompute (for repacking a patched image).
-- `midi-tools/m12_dump_decode.py` — parses a captured `.syx` dump into the full address-block map, every checksum verified.
+- **Ghidra 12.1.2**: import `code.bin` as `SuperH:BE:32:SH-2A`, base `0x0C000000`; scripts in
+  `firmware/ghidra_scripts/`. `firmware/sh2a_xref.py` is a pure-Python SH-2A literal xref engine.
+- `firmware/pgm_checksum.py` — installer checksum/size recompute (repacking a patched image).
+- `midi-tools/`: `python3` + `mido` (live MIDI only); `forscore_4sb.py` and `ysfc.py` are
+  **standard-library only**.
 
 ## Firmware safety
-`firmware/8H39OS_.PGM` is the **pristine recovery image — do not flash it expecting the patch; it is
-the revert path.** The patched build is `firmware/experiment/8H39OS_.PGM`. Recovery: copy a pristine
-`8H39OS_.PGM` to a USB root, power on holding **^ (up)**, press **[ENTER]**. Patch only the PROG
-block, never BOOT; don't lose power mid-write.
+The pristine recovery image is the revert path — **do not flash it expecting the patch.** Recovery:
+copy a pristine `8H39OS_.PGM` to a USB root, power on holding **^ (up)**, press **[ENTER]**. Patch
+the PROG block only, never BOOT; don't lose power mid-write.
 
 ## Status
-- **Done:** SysEx protocol recovery (MITM + firmware-confirmed), the live control API
-  (`m12_control.py`), live param capture/decode, and the loop producer.
+- **Done:** the four RE surfaces (SysEx protocol — MITM + firmware-confirmed; firmware structure; the
+  YSFC save format; the forScore `.4sb` format), the live control API, waveform extraction, the
+  forScore Send editor, the per-kit tempo edit, the loop producer, and the `setlist_sync` orchestrator.
 - **Built, flash-test pending:** the Feature-7 firmware patch.
-- **Active:** iterating the loop generator against player feedback (the player is the scoring function).
+- **Used in production:** the page-turn show-automation workflow, on real gigs.

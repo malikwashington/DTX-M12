@@ -26,6 +26,37 @@ Address = (category, index, offset). See `docs/M12_PARAM_MAP.md`.
 Prereq on the unit: **UTIL → MIDI → IN/OUT = USB**, device number all/1.
 For the sequencer Stop (forScore `FC`) to work: **UTIL6-8 SeqCtrl = in / in-out**.
 
+## Programming over MIDI vs. editing the save file — what each can reach
+
+Two non-overlapping routes. **Pick by what you're changing**, not preference.
+
+### Live MIDI / SysEx (`m12_control.py`) — real-time, but only the *current-kit edit buffer*
+**Verified live (2026-06-26):** you can build a whole kit over SysEx — assign voices,
+volume, pan, EG, **and the kit name** (cat 0x14 off 0x00–0x0F is writable) across the pads
+— then press **[STORE]** once and it persists (confirmed by reload-from-flash). Kit *select*
+is plain MIDI (Bank Select 125 / LSB / Program Change on ch10). Great for tone design and the
+sound-matcher. **Limits, and why:**
+- **It only writes the edit buffer (the loaded kit), which is volatile.** Nothing persists
+  until you **STORE**, and **STORE has no MIDI/SysEx command** — it's a front-panel button.
+  So the unit can't be *fully* programmed headless: one panel press per kit you bank.
+- **Some fields are read-only over SysEx even though they read back** — notably **stored kit
+  TEMPO (cat 0x14 off 0x14/0x15): writes are rejected.** Writability is per-parameter; the
+  dump exposes more than is writable. Tempo must go through the save file (or the panel).
+- **Patterns, waveforms, songs, and the kit *library* are NOT in the SysEx address space.**
+  Only the kit edit buffer (cat 0x00–0x28) answers requests. You can't transfer a pattern, a
+  sample, or a whole 200-kit library over MIDI — there is no MIDI path into flash storage.
+- *Why:* Yamaha's MIDI spec exposes only live edit + real-time performance control; persistent
+  flash (library/patterns/waves) is reachable only through the file format, with STORE as the
+  one gated bridge from edit-buffer → flash.
+
+### Save-file editing (`ysfc.py`, thumb drive) — the whole persistent store, but offline
+Reaches **everything in flash**: all 200 kit slots, **stored tempo**, patterns (DPTN),
+waveforms (DWAV), trigger setups, utility — no checksums, so hand-edits load. **Limit:** it's
+**not live** — edit the `.MT*` file on the computer, copy to USB, load on the unit.
+
+**Rule of thumb:** live tone-shaping / kit-select / sound-matching → **MIDI**; stored tempo,
+patterns, waves, or bulk kit-library work → **save file**.
+
 ## captures/
 Archived `.syx` dumps from the RE session (kit-buffer scans, per-category enumerations,
 tempo/pad-function diffs). The decoded results are in `docs/M12_PARAM_MAP.md`.
