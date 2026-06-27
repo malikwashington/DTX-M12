@@ -41,6 +41,8 @@ docs/sm_text.txt
 # =====================================================================
 midi_capture.log
 midi-tools/captures/
+waves_out/
+**/waves_out/
 loops/generated/
 loops/streamed/
 **/*.syx

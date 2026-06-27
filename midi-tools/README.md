@@ -12,6 +12,11 @@ Address = (category, index, offset). See `docs/M12_PARAM_MAP.md`.
 - `syx_view.py` — compact one-line-per-block viewer (ASCII-aware).
 - `dtxm12_probe.py` — identity round-trip + probe battery.
 - `m12_midi_spy.py` — MITM monitor/bridge/emulate (recover the app↔M12 protocol).
+- `ysfc.py` — **offline save-file tool** (the `.MT*` / YSFC family — `.MTA`/`.MTK`/`.MTP`/`.MTW`).
+  Read-only `map`/`info`/`kits`/`waves`/`patterns`; `extract-waves FILE --out DIR` (DWAV → WAV);
+  `set-tempo FILE --kit NAME --bpm N` (the proven checksum-free per-kit tempo edit; writes a NEW
+  file by default). Format notes in the module docstring + `docs/DOSSIER.md` §6. **Note:** extracted
+  WAVs are Yamaha factory samples — kept local only (gitignored), never committed.
 
 Prereq on the unit: **UTIL → MIDI → IN/OUT = USB**, device number all/1.
 For the sequencer Stop (forScore `FC`) to work: **UTIL6-8 SeqCtrl = in / in-out**.

@@ -167,7 +167,10 @@ Cabling needed: **M12 OUTPUT L/R → Scarlett inputs 1/2.**
 - ⚠️ **Tempo offset is format-specific.** The earlier-solved `0x4DD4` (§2) lands inside
   the DROT waveform name-table here (reads `RXRD2`), so that offset was for a *different*
   export (single-kit), **not** this ALL file. Re-locate tempo inside DKIT for ALL files.
-- 🔧 Parser: `ysfc.py` (scratch) dumps the chunk map, kit list, and wave catalog.
+- 🔧 Parser: **`midi-tools/ysfc.py`** (committed; byte-verified against TEST.MTA) — `map`/`info`/
+  `kits`/`waves`/`patterns`, `extract-waves` (DWAV→WAV), `set-tempo` (checksum-free per-kit edit).
+  Record layout confirmed: catalog rec @stride 0x20 = name[16]+order+bytesize+diroff+id; kit body
+  @DKIT+reloff, tempo u16BE @body+0x14; wave block @DWAV+cumoff, 0x50 hdr + BE-s16 mono PCM.
 
 ## 7. Firmware & flashing — ✅ ROUTE IS OPEN (checksum solved)
 - ✅ `8H39OS_.PGM` = updater. Header `"InstallerFile … DTXM12"`; `CM` descriptor @0xa0
