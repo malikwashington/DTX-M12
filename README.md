@@ -95,6 +95,33 @@ get programmed without opening forScore. See `midi-tools/forscore_4sb_README.md`
 
 ---
 
+## Two write paths into the M12 — and why you need both
+
+Programming over **MIDI/SysEx** and editing the **save file** reach *non-overlapping* parts of the
+unit. This isn't a preference; it's a hard limit in the M12's MIDI implementation.
+
+**Live MIDI / SysEx** (`m12_control.py`) reaches only the **current-kit edit buffer**. Verified live:
+you can build a whole kit over SysEx — voices, volume, pan, EG, **and the kit name** (cat `0x14`
+off `0x00–0x0F` is writable) — and select kits over MIDI (Bank Select + Program Change). But:
+- the edit buffer is **volatile** — nothing persists until you **STORE**, and **STORE has no
+  MIDI/SysEx command**; it's a front-panel button. So the unit can't be fully programmed headless
+  (one panel press per kit you bank).
+- some fields are **read-only over SysEx** even though they read back — notably **stored kit tempo**
+  (writes are rejected); writability is per-parameter.
+- **patterns, waveforms, songs, and the kit *library* aren't in the SysEx address space at all** —
+  only the kit edit buffer (cat `0x00–0x28`) answers. There is **no MIDI path into flash storage.**
+
+**The save file** (`ysfc.py`, thumb drive) reaches **everything persistent** — all 200 kit slots,
+stored tempo, patterns, waveforms, trigger setups — with no checksum to satisfy. But it's **offline**:
+edit on the computer, copy to USB, load on the unit.
+
+*Why:* Yamaha's MIDI spec exposes only live edit + real-time performance control; persistent flash
+(library / patterns / waves) is reachable only through the file format, with STORE the one gated
+bridge from edit-buffer → flash. **So the orchestrator uses both:** MIDI/SysEx for live control and
+tone, the save file for tempo and anything stored.
+
+---
+
 ## The producer (loop generation) — `loop-pipeline/`
 `role_producer.py` generates role-based gospel/R&B percussion loops, rendering a stereo preview with
 the **real M12 voice samples + applied voice parameters**, plus `.mid` and `.params.json`. Tone
