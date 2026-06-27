@@ -17,6 +17,11 @@ Address = (category, index, offset). See `docs/M12_PARAM_MAP.md`.
   `set-tempo FILE --kit NAME --bpm N` (the proven checksum-free per-kit tempo edit; writes a NEW
   file by default). Format notes in the module docstring + `docs/DOSSIER.md` §6. **Note:** extracted
   WAVs are Yamaha factory samples — kept local only (gitignored), never committed.
+- `forscore_4sb.py` — **forScore `.4sb` backup** reader/editor (iPad side of the rig).
+  `info`/`scores`/`search`/`midi`/`links`/`setlists`; `inject-stop` prepends `FC` (MIDI Stop)
+  to a chart's MIDI Send so opening it stops the running pattern then selects the kit — the
+  forScore-side automation of the `SeqCtrl=in` stop. See `forscore_4sb_README.md`. **Note:**
+  `.4sb` backups can hold copyrighted sheet music → gitignored (`*.4sb`); ship the reader, not data.
 
 Prereq on the unit: **UTIL → MIDI → IN/OUT = USB**, device number all/1.
 For the sequencer Stop (forScore `FC`) to work: **UTIL6-8 SeqCtrl = in / in-out**.

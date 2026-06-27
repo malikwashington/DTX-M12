@@ -49,6 +49,10 @@ loops/streamed/
 **/*.wav
 **/*.mid
 
+# forScore backups (may contain copyrighted sheet-music PDFs / user library).
+# Ship the reader, never the backup data.
+*.4sb
+
 # =====================================================================
 # Environment / models / cruft
 # =====================================================================
