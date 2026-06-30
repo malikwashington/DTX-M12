@@ -10,7 +10,7 @@ Address = `category, index, offset` (3 bytes).
 ## Category 0x10 — per-pad voice params (live edit buffer)  `10 [padIndex] [offset]`
 | offset | parameter | range seen | notes |
 |--------|-----------|-----------|-------|
-| 0x01   | **Voice Category** | id | 0x04=Hi-Hat, 0x07=Orchestral/Misc (more TBD via Data List order) |
+| 0x01   | **Voice Category** | 1–14 | see the full byte map below (calibrated live) |
 | 0x02   | **Voice Number** | 1–N in category | Hi-Hat 041 = 0x29 |
 | 0x03   | **Volume** | 0–127 | Pad 6 (idx 0x08) 100→15 = `10 08 03 0F` |
 | 0x04   | **Pan**    | 0–127, 0x40=center | Pad 6 → 0x7F = hard right |
@@ -32,6 +32,26 @@ Address = `category, index, offset` (3 bytes).
 | 1 | 0x0C | pitch capture |
 | 6 | 0x08 | volume/pan/pitch/cutoff/decay |
 (need the other 10 — plan: nudge each pad's volume once for a full table)
+
+## Voice Category byte (cat 0x10 off 0x01) — CALIBRATED LIVE (2026-06-29)
+Identified each category by the **voice-number clamp**: write voice# = 127 (off 0x02), read it
+back — the unit clamps it to that category's voice count, matched to the Data List counts.
+(Corrects the earlier guess "0x07=Orchestral"; 0x07 is Brazilian.)
+
+| byte | category | #voices | | byte | category | #voices |
+|------|----------|---------|-|------|----------|---------|
+| 1 | Snare | 127 | | 8 | India Percussion* | 62 |
+| 2 | Tom | 76 | | 9 | Japanese Percussion | 30 |
+| 3 | Cymbal | 51 | | 10 | (unidentified perc) | 62 |
+| 4 | Hi-Hat | 47 | | 11 | Orchestral/Misc Perc | 79 |
+| 5 | Electric Percussion | 87 | | 12 | (TBD) | 44 |
+| 6 | Cuban Percussion | 103 | | 13 | African/Arabic Perc | 63 |
+| 7 | Brazilian Percussion | 55 | | 14 | (TBD) | 85 |
+
+\*bytes 8 and 10 both report 62; only India (62) is in the Data List, so one of them is India
+(labeled 8, unverified) and the other is an unlisted 62-voice category. Bytes 5–13 are the
+percussion set rendered by `midi-tools/capture_voices.py` (preset audio isn't in any file —
+it's captured off the analog out).
 
 ## Category 0x00 — kit common (single block at 00 00 xx)
 (captured but not yet labeled — e.g. 00 00 06=0x40, 00 00 0C=0x20, 00 00 0D=0x14 …)

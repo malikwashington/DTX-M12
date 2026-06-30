@@ -17,6 +17,11 @@ Address = (category, index, offset). See `docs/M12_PARAM_MAP.md`.
   `set-tempo FILE --kit NAME --bpm N` (the proven checksum-free per-kit tempo edit; writes a NEW
   file by default). Format notes in the module docstring + `docs/DOSSIER.md` §6. **Note:** extracted
   WAVs are Yamaha factory samples — kept local only (gitignored), never committed.
+- `capture_voices.py` — **render preset voices to WAV** off the audio interface (the 1,277
+  presets aren't in any file). Selects each voice over SysEx (cat 0x10), triggers a note, records
+  the Scarlett (avfoundation `:3`), splits/trims/normalizes. Calibrates each category's voice
+  count live (the clamp). Default = the percussion + electric-perc set; pass category bytes for
+  others. Output → `samples/presets/<category>/` (**gitignored** — Yamaha audio, never committed).
 - `forscore_4sb.py` — **forScore `.4sb` backup** reader/editor (iPad side of the rig).
   `info`/`scores`/`search`/`midi`/`links`/`setlists`; `inject-stop` prepends `FC` (MIDI Stop)
   to a chart's MIDI Send so opening it stops the running pattern then selects the kit — the
